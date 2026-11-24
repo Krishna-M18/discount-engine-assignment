@@ -6,22 +6,57 @@ import dotenv from 'dotenv'
 dotenv.config()
 
 const app = express()
+const PORT = process.env.PORT || 3001
+
+// Middleware
 app.use(express.json({ limit: '10kb' }))
 
-const PORT = 3001
+// CORS configuration for local and deployed frontend
+const allowedOrigins = [
+  'http://localhost:5173',
+  process.env.FRONTEND_URL,
+].filter(Boolean)
 
+app.use((req, res, next) => {
+  const origin = req.headers.origin
+
+  if (origin && allowedOrigins.includes(origin)) {
+    res.setHeader('Access-Control-Allow-Origin', origin)
+    res.setHeader('Vary', 'Origin')
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type')
+  }
+
+  if (req.method === 'OPTIONS') {
+    return res.sendStatus(204)
+  }
+
+  next()
+})
+
+// Health check endpoint
+app.get('/health', (req, res) => {
+  res.status(200).json({
+    status: 'ok',
+    message: 'Discount Engine API is running',
+  })
+})
+
+// Check API key
 if (!process.env.GROQ_API_KEY) {
   console.error('GROQ_API_KEY is missing. Check your .env file.')
   process.exit(1)
 }
 
+// Initialize Groq
 const groq = new Groq({
   apiKey: process.env.GROQ_API_KEY,
 })
 
+// Natural language discount rule endpoint
 app.post('/api/parse-rule', async (req, res) => {
   try {
-    const { text } = req.body
+    const { text } = req.body ?? {}
 
     if (typeof text !== 'string' || !text.trim()) {
       return res.status(400).json({
@@ -49,15 +84,15 @@ Supported rule types:
 3. Cart: applies to the entire cart and requires a minimum cart value.
 
 Rules:
-- Percentage discounts must have a value between 1 and 100.
-- Flat discounts must have a positive value.
+- Percentage discounts must be between 1 and 100.
+- Flat discounts must be positive.
 - Brand and platform rules require appliesTo.
 - Cart rules must be percentage discounts and require minCartValue.
-- If the instruction is vague, missing a discount value, or missing a required condition, set isResolvable to false.
+- Cart rules must have an empty appliesTo.
+- Non-cart rules must have minCartValue set to null.
+- If the instruction is vague or missing required information, set isResolvable to false.
 - Never invent missing values.
-- For unresolvable instructions, explain what information is missing in clarification.
-- For cart rules, set appliesTo to an empty string.
-- For non-cart rules, set minCartValue to null.
+- Explain missing information in clarification.
 - Do not interpret unrelated text as a discount rule.
           `,
         },
@@ -107,7 +142,7 @@ Rules:
       },
     })
 
-    const content = completion.choices[0].message.content
+    const content = completion.choices?.[0]?.message?.content
 
     if (!content) {
       return res.status(502).json({
@@ -138,26 +173,33 @@ Rules:
 
       if (
         (rule.scope === 'brand' || rule.scope === 'platform') &&
-        !rule.appliesTo.trim()
+        (
+          typeof rule.appliesTo !== 'string' ||
+          !rule.appliesTo.trim() ||
+          rule.minCartValue !== null
+        )
       ) {
         return res.status(422).json({
-          error: 'A brand or platform name is required.',
+          error: 'Brand and platform rules require a target and cannot have a cart minimum.',
         })
       }
 
       if (
         rule.scope === 'cart' &&
-        (rule.type !== 'percentage' ||
+        (
+          rule.type !== 'percentage' ||
+          rule.appliesTo !== '' ||
           !Number.isFinite(rule.minCartValue) ||
-          rule.minCartValue <= 0)
+          rule.minCartValue <= 0
+        )
       ) {
         return res.status(422).json({
-          error: 'Cart rules require a percentage and a positive minimum cart value.',
+          error: 'Cart rules require a percentage, an empty target, and a positive minimum cart value.',
         })
       }
     }
 
-    return res.json(rule)
+    return res.status(200).json(rule)
   } catch (error) {
     console.error('Rule parsing error:', error.message)
 
@@ -167,6 +209,7 @@ Rules:
   }
 })
 
+// Start server
 app.listen(PORT, () => {
-  console.log(`Groq backend running at http://localhost:${PORT}`)
+  console.log(`Groq backend running on port ${PORT}`)
 })
