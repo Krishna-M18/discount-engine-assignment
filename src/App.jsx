@@ -12,6 +12,11 @@ import {
 } from './engine/discountEngine.js'
 
 // ── Column definitions ───────────────────────────────────────────
+// Production backend URL is configured through Vercel.
+// Locally, the Vite proxy will continue to work.
+const API_BASE_URL = import.meta.env.PROD
+  ? 'https://discount-engine-assignment-dk1r.onrender.com'
+  : ''
 
 const RULES_COLUMNS = [
   { key: 'ruleId', label: 'Rule ID' },
@@ -318,7 +323,7 @@ async function handlePDFLoad(file) {
     setAiRule(null)
 
     try {
-      const response = await fetch('/api/parse-rule', {
+      const response = await fetch(`${API_BASE_URL}/api/parse-rule`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
